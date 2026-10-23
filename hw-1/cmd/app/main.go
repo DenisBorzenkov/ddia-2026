@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"log/slog"
 	"net/http"
 	"os"
@@ -18,6 +19,12 @@ import (
 
 func main() {
 	addr := getenv("LISTEN_ADDR", ":8080")
+
+	healthcheck := flag.Bool("healthcheck", false, "check /health and exit")
+	flag.Parse()
+	if *healthcheck {
+		os.Exit(checkHealth(addr))
+	}
 
 	r := chi.NewRouter()
 	r.Get("/health", api.Health)
@@ -49,4 +56,18 @@ func getenv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// checkHealth - для HEALTHCHECK в образе без shell и curl.
+func checkHealth(addr string) int {
+	c := http.Client{Timeout: 2 * time.Second}
+	resp, err := c.Get("http://localhost" + addr + "/health")
+	if err != nil {
+		return 1
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 1
+	}
+	return 0
 }

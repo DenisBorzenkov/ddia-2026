@@ -1,0 +1,30 @@
+name: ddia-hw-1
+
+x-app: &app
+  build:
+    context: .
+    target: app
+  image: ddia-hw-1/app:local
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD", "/app", "-healthcheck"]
+    interval: 5s
+    timeout: 3s
+    retries: 5
+
+services:
+  app-1:
+    <<: *app
+    environment:
+      POD_ID: pod-1
+      DATACENTER: dc-a
+    ports:
+      - "8081:8080"
+
+  app-2:
+    <<: *app
+    environment:
+      POD_ID: pod-2
+      DATACENTER: dc-b
+    ports:
+      - "8082:8080"

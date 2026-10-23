@@ -42,6 +42,31 @@ jobs:
           version: v2.15.0
           working-directory: hw-1
 
+  docker:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: hadolint/hadolint-action@v3.5.0
+        with:
+          dockerfile: hw-1/Dockerfile
+      - name: compose config
+        run: docker compose config -q
+      - name: compose up
+        run: docker compose up -d --build --wait --wait-timeout 120
+      - name: smoke
+        run: |
+          for port in 8081 8082; do
+            curl -sSf "localhost:$port/health"
+            curl -sSf -X POST "localhost:$port/items" -d '{"name":"smoke"}'
+            test "$(curl -s -o /dev/null -w '%{http_code}' "localhost:$port/items/999")" = 404
+          done
+      - name: logs
+        if: failure()
+        run: docker compose logs
+      - name: compose down
+        if: always()
+        run: docker compose down -v
+
   actionlint:
     runs-on: ubuntu-24.04
     defaults:
