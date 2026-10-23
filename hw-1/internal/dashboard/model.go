@@ -48,15 +48,16 @@ type Datasource struct {
 }
 
 type Panel struct {
-	ID          int          `json:"id"`
-	Type        string       `json:"type"`
-	Title       string       `json:"title"`
-	GridPos     GridPos      `json:"gridPos"`
-	Datasource  *Datasource  `json:"datasource,omitempty"`
-	Targets     []Target     `json:"targets,omitempty"`
-	FieldConfig *FieldConfig `json:"fieldConfig,omitempty"`
-	Collapsed   *bool        `json:"collapsed,omitempty"`
-	Panels      []Panel      `json:"panels,omitempty"`
+	ID          int           `json:"id"`
+	Type        string        `json:"type"`
+	Title       string        `json:"title"`
+	GridPos     GridPos       `json:"gridPos"`
+	Datasource  *Datasource   `json:"datasource,omitempty"`
+	Targets     []Target      `json:"targets,omitempty"`
+	FieldConfig *FieldConfig  `json:"fieldConfig,omitempty"`
+	Options     *PanelOptions `json:"options,omitempty"`
+	Collapsed   *bool         `json:"collapsed,omitempty"`
+	Panels      []Panel       `json:"panels,omitempty"`
 }
 
 type GridPos struct {
@@ -81,4 +82,20 @@ type FieldConfig struct {
 type FieldDefaults struct {
 	Unit string `json:"unit"`
 	Min  *int   `json:"min,omitempty"`
+}
+
+type PanelOptions struct {
+	Tooltip Tooltip `json:"tooltip"`
+	Legend  Legend  `json:"legend"`
+}
+
+type Tooltip struct {
+	Mode string `json:"mode"`
+	Sort string `json:"sort"`
+}
+
+type Legend struct {
+	DisplayMode string `json:"displayMode"`
+	Placement   string `json:"placement"`
+	ShowLegend  bool   `json:"showLegend"`
 }

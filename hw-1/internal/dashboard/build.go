@@ -114,5 +114,10 @@ func timeseries(title, unit string, targets []Target) Panel {
 	return Panel{
 		Type: "timeseries", Title: title, Targets: targets,
 		FieldConfig: &FieldConfig{Defaults: FieldDefaults{Unit: unit, Min: &zero}, Overrides: []any{}},
+		// общий тултип: p50/p95/p99 и коды ошибок видны в одной точке
+		Options: &PanelOptions{
+			Tooltip: Tooltip{Mode: "multi", Sort: "desc"},
+			Legend:  Legend{DisplayMode: "list", Placement: "bottom", ShowLegend: true},
+		},
 	}
 }
