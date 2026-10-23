@@ -94,3 +94,20 @@ services:
         condition: service_healthy
       grafana:
         condition: service_healthy
+
+  load:
+    image: grafana/k6:2.3.0
+    command: ["run", "--quiet", "--summary-mode=disabled", "/scripts/load.js"]
+    environment:
+      TARGETS: http://app-1:8080,http://app-2:8080
+      RATE: ${LOAD_RATE:-30}
+      RAMP: ${LOAD_RAMP:-3m}
+    volumes:
+      - ./load:/scripts:ro
+    depends_on:
+      app-1:
+        condition: service_healthy
+      app-2:
+        condition: service_healthy
+      dashgen:
+        condition: service_completed_successfully
