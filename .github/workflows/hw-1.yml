@@ -56,9 +56,14 @@ jobs:
       - name: promtool
         run: docker run --rm -v "$PWD/prometheus:/cfg:ro" --entrypoint promtool prom/prometheus:v3.15.1 check config /cfg/prometheus.yml
       - name: compose up
-        run: docker compose up -d --build --wait --wait-timeout 120
+        run: docker compose up -d --build
         env:
           FAIL_RATE: "0"
+      - name: dashgen
+        run: |
+          code=$(timeout 180 docker wait "$(docker compose ps -aq dashgen)")
+          docker compose logs dashgen
+          test "$code" = 0
       - name: smoke
         run: |
           for port in 8081 8082; do
@@ -89,6 +94,17 @@ jobs:
             sleep 2
           done
           exit 1
+      - name: grafana dashboard
+        run: |
+          set -a; . ./.env; set +a
+          auth="$GRAFANA_ADMIN_USER:$GRAFANA_ADMIN_PASSWORD"
+          handlers=$(curl -sSf localhost:8081/handlers | jq '.handlers | length')
+          curl -sSf -u "$auth" localhost:3000/api/dashboards/uid/hw1-handlers | jq -e --argjson n "$handlers" '
+            .dashboard.editable == false and
+            ([.dashboard.panels[] | select(.type == "row")] | length) == $n and
+            ([.dashboard.panels[] | select(.type == "timeseries")] | length) == 3 * $n and
+            ([.dashboard.templating.list[].name] | sort) == ["datacenter", "pod"] and
+            all(.dashboard.panels[] | select(.type == "timeseries") | .targets[]; .datasource.uid == "prometheus")'
       - name: logs
         if: failure()
         run: docker compose logs

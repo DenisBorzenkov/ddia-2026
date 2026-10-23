@@ -3,7 +3,11 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/app ./cmd/app
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/ ./cmd/...
+
+FROM gcr.io/distroless/static-debian13:nonroot AS dashgen
+COPY --from=build /out/dashgen /dashgen
+ENTRYPOINT ["/dashgen"]
 
 FROM gcr.io/distroless/static-debian13:nonroot AS app
 COPY --from=build /out/app /app
