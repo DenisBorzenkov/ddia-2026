@@ -47,6 +47,9 @@ func TestBuild(t *testing.T) {
 	if rps.Targets[0].Expr != `sum(rate(http_server_requests_total{`+sel+`}[$__rate_interval]))` {
 		t.Errorf("rps: %s", rps.Targets[0].Expr)
 	}
+	if lat.Options == nil || lat.Options.Tooltip.Mode != "multi" {
+		t.Errorf("latency tooltip: %+v", lat.Options)
+	}
 	if !strings.HasPrefix(errs.Targets[0].Expr, "sum by (code) (") || !strings.Contains(errs.Targets[0].Expr, `code=~"4..|5.."`) {
 		t.Errorf("errors: %s", errs.Targets[0].Expr)
 	}
