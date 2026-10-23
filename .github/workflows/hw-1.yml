@@ -53,13 +53,18 @@ jobs:
         run: docker compose config -q
       - name: compose up
         run: docker compose up -d --build --wait --wait-timeout 120
+        env:
+          FAIL_RATE: "0"
       - name: smoke
         run: |
           for port in 8081 8082; do
             curl -sSf "localhost:$port/health"
             curl -sSf -X POST "localhost:$port/items" -d '{"name":"smoke"}'
             test "$(curl -s -o /dev/null -w '%{http_code}' "localhost:$port/items/999")" = 404
+            curl -sSf "localhost:$port/handlers" | grep -q '"route":"/items/{id}"'
           done
+          curl -sSf localhost:8081/metrics | grep 'http_server_requests_total{code="404",datacenter="dc-a",method="GET",pod="pod-1",route="/items/{id}"}'
+          curl -sSf localhost:8082/metrics | grep 'http_server_requests_total{code="404",datacenter="dc-b",method="GET",pod="pod-2",route="/items/{id}"}'
       - name: logs
         if: failure()
         run: docker compose logs
