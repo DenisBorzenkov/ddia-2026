@@ -6,6 +6,9 @@ x-app: &app
     target: app
   image: ddia-hw-1/app:local
   restart: unless-stopped
+  environment: &app-env
+    FAIL_RATE: ${FAIL_RATE:-0.02}
+    MAX_DELAY: 50ms
   healthcheck:
     test: ["CMD", "/app", "-healthcheck"]
     interval: 5s
@@ -16,6 +19,7 @@ services:
   app-1:
     <<: *app
     environment:
+      <<: *app-env
       POD_ID: pod-1
       DATACENTER: dc-a
     ports:
@@ -24,6 +28,7 @@ services:
   app-2:
     <<: *app
     environment:
+      <<: *app-env
       POD_ID: pod-2
       DATACENTER: dc-b
     ports:

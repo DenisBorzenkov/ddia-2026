@@ -8,13 +8,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-
-	"github.com/DenisBorzenkov/ddia-2026/hw-1/internal/api"
-	"github.com/DenisBorzenkov/ddia-2026/hw-1/internal/store"
+	"github.com/DenisBorzenkov/ddia-2026/hw-1/internal/server"
 )
 
 func main() {
@@ -26,9 +24,25 @@ func main() {
 		os.Exit(checkHealth(addr))
 	}
 
-	r := chi.NewRouter()
-	r.Get("/health", api.Health)
-	api.New(store.New()).Routes(r)
+	cfg := server.Config{
+		PodID:      getenv("POD_ID", "local"),
+		Datacenter: getenv("DATACENTER", "local"),
+	}
+	var err error
+	if cfg.FailRate, err = strconv.ParseFloat(getenv("FAIL_RATE", "0"), 64); err != nil {
+		slog.Error("FAIL_RATE", "err", err)
+		os.Exit(1)
+	}
+	if cfg.MaxDelay, err = time.ParseDuration(getenv("MAX_DELAY", "0s")); err != nil {
+		slog.Error("MAX_DELAY", "err", err)
+		os.Exit(1)
+	}
+
+	r, err := server.New(cfg)
+	if err != nil {
+		slog.Error("router", "err", err)
+		os.Exit(1)
+	}
 
 	srv := &http.Server{Addr: addr, Handler: r, ReadHeaderTimeout: 5 * time.Second}
 
@@ -36,7 +50,7 @@ func main() {
 	defer stop()
 
 	go func() {
-		slog.Info("listening", "addr", addr)
+		slog.Info("listening", "addr", addr, "pod", cfg.PodID, "datacenter", cfg.Datacenter)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("server", "err", err)
 			os.Exit(1)
