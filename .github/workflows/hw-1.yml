@@ -83,7 +83,12 @@ jobs:
           set -a; . ./.env; set +a
           auth="$GRAFANA_ADMIN_USER:$GRAFANA_ADMIN_PASSWORD"
           curl -sSf -u "$auth" localhost:3000/api/datasources/uid/prometheus | jq -e '.url == "http://prometheus:9090"'
-          curl -sSf -u "$auth" localhost:3000/api/datasources/uid/prometheus/health | jq -e '.status == "OK"'
+          # плагин prometheus в grafana 13 доустанавливается в фоне после старта
+          for _ in $(seq 30); do
+            curl -s -u "$auth" localhost:3000/api/datasources/uid/prometheus/health | jq -e '.status == "OK"' && exit 0
+            sleep 2
+          done
+          exit 1
       - name: logs
         if: failure()
         run: docker compose logs
