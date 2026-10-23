@@ -58,7 +58,7 @@ jobs:
       - name: compose up
         run: docker compose up -d --build
         env:
-          FAIL_RATE: "0"
+          LOAD_RAMP: 20s
       - name: dashgen
         run: |
           code=$(timeout 180 docker wait "$(docker compose ps -aq dashgen)")
@@ -66,10 +66,18 @@ jobs:
           test "$code" = 0
       - name: smoke
         run: |
+          # FAIL_RATE даёт случайные 500, их повторяем
+          req() {
+            for _ in 1 2 3 4 5; do
+              code=$(curl -s -o /tmp/body -w '%{http_code}' "$@")
+              [ "$code" != 500 ] && { echo "$code"; return; }
+            done
+            echo 500
+          }
           for port in 8081 8082; do
-            curl -sSf "localhost:$port/health"
-            curl -sSf -X POST "localhost:$port/items" -d '{"name":"smoke"}'
-            test "$(curl -s -o /dev/null -w '%{http_code}' "localhost:$port/items/999")" = 404
+            test "$(req "localhost:$port/health")" = 200
+            test "$(req -X POST "localhost:$port/items" -d '{"name":"smoke"}')" = 201
+            test "$(req "localhost:$port/items/999999999")" = 404
             curl -sSf "localhost:$port/handlers" | grep -q '"route":"/items/{id}"'
           done
           curl -sSf localhost:8081/metrics | grep 'http_server_requests_total{code="404",datacenter="dc-a",method="GET",pod="pod-1",route="/items/{id}"}'
@@ -105,6 +113,19 @@ jobs:
             ([.dashboard.panels[] | select(.type == "timeseries")] | length) == 3 * $n and
             ([.dashboard.templating.list[].name] | sort) == ["datacenter", "pod"] and
             all(.dashboard.panels[] | select(.type == "timeseries") | .targets[]; .datasource.uid == "prometheus")'
+      - name: load
+        run: |
+          q() { curl -s localhost:9090/api/v1/query --data-urlencode "query=$1" | jq -r '.data.result | length'; }
+          for _ in $(seq 30); do
+            pods=$(q 'sum by (pod) (rate(http_server_requests_total[1m]) > 0)')
+            routes=$(q 'sum by (method, route) (rate(http_server_requests_total[1m]) > 0)')
+            codes=$(q 'sum by (code) (increase(http_server_requests_total{code=~"404|500"}[2m]) > 0)')
+            echo "pods=$pods routes=$routes codes=$codes"
+            [ "$pods" = 2 ] && [ "$routes" = 3 ] && [ "$codes" = 2 ] && exit 0
+            sleep 5
+          done
+          docker compose logs load
+          exit 1
       - name: logs
         if: failure()
         run: docker compose logs
