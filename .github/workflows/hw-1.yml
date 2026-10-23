@@ -49,8 +49,12 @@ jobs:
       - uses: hadolint/hadolint-action@v3.5.0
         with:
           dockerfile: hw-1/Dockerfile
+      - name: env
+        run: cp .env.example .env
       - name: compose config
         run: docker compose config -q
+      - name: promtool
+        run: docker run --rm -v "$PWD/prometheus:/cfg:ro" --entrypoint promtool prom/prometheus:v3.15.1 check config /cfg/prometheus.yml
       - name: compose up
         run: docker compose up -d --build --wait --wait-timeout 120
         env:
@@ -65,6 +69,26 @@ jobs:
           done
           curl -sSf localhost:8081/metrics | grep 'http_server_requests_total{code="404",datacenter="dc-a",method="GET",pod="pod-1",route="/items/{id}"}'
           curl -sSf localhost:8082/metrics | grep 'http_server_requests_total{code="404",datacenter="dc-b",method="GET",pod="pod-2",route="/items/{id}"}'
+      - name: prometheus targets
+        run: |
+          for _ in $(seq 30); do
+            up=$(curl -s localhost:9090/api/v1/targets | jq '[.data.activeTargets[] | select(.health == "up")] | length')
+            [ "$up" = 2 ] && exit 0
+            sleep 2
+          done
+          curl -s localhost:9090/api/v1/targets | jq .
+          exit 1
+      - name: grafana datasource
+        run: |
+          set -a; . ./.env; set +a
+          auth="$GRAFANA_ADMIN_USER:$GRAFANA_ADMIN_PASSWORD"
+          curl -sSf -u "$auth" localhost:3000/api/datasources/uid/prometheus | jq -e '.url == "http://prometheus:9090"'
+          # плагин prometheus в grafana 13 доустанавливается в фоне после старта
+          for _ in $(seq 30); do
+            curl -s -u "$auth" localhost:3000/api/datasources/uid/prometheus/health | jq -e '.status == "OK"' && exit 0
+            sleep 2
+          done
+          exit 1
       - name: logs
         if: failure()
         run: docker compose logs
