@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -41,7 +43,45 @@ func (g *Grafana) Upsert(ctx context.Context, d Dashboard) error {
 	return g.do(ctx, http.MethodPost, g.URL+"/api/dashboards/db", payload, g.User, g.Password, nil)
 }
 
-func (c *Client) do(ctx context.Context, method, url string, in any, user, pass string, out any) error {
+// EnsureViewer заводит пользователя с ролью Viewer или обновляет ему пароль.
+func (g *Grafana) EnsureViewer(ctx context.Context, login, password string) error {
+	var user struct {
+		ID int64 `json:"id"`
+	}
+	err := g.do(ctx, http.MethodGet, g.URL+"/api/users/lookup?loginOrEmail="+url.QueryEscape(login), nil, g.User, g.Password, &user)
+	var se *StatusError
+	switch {
+	case errors.As(err, &se) && se.Code == http.StatusNotFound:
+		body := map[string]any{"name": login, "login": login, "password": password, "OrgId": 1}
+		if err := g.do(ctx, http.MethodPost, g.URL+"/api/admin/users", body, g.User, g.Password, &user); err != nil {
+			return err
+		}
+	case err != nil:
+		return err
+	default:
+		body := map[string]string{"password": password}
+		if err := g.do(ctx, http.MethodPut, fmt.Sprintf("%s/api/admin/users/%d/password", g.URL, user.ID), body, g.User, g.Password, nil); err != nil {
+			return err
+		}
+	}
+	role := map[string]string{"role": "Viewer"}
+	return g.do(ctx, http.MethodPatch, fmt.Sprintf("%s/api/org/users/%d", g.URL, user.ID), role, g.User, g.Password, nil)
+}
+
+// SetHome делает дашборд домашним для организации.
+func (g *Grafana) SetHome(ctx context.Context, uid string) error {
+	body := map[string]string{"homeDashboardUID": uid}
+	return g.do(ctx, http.MethodPut, g.URL+"/api/org/preferences", body, g.User, g.Password, nil)
+}
+
+type StatusError struct {
+	Code int
+	Msg  string
+}
+
+func (e *StatusError) Error() string { return e.Msg }
+
+func (c *Client) do(ctx context.Context, method, target string, in any, user, pass string, out any) error {
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
@@ -50,7 +90,7 @@ func (c *Client) do(ctx context.Context, method, url string, in any, user, pass 
 		}
 		body = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, url, body)
+	req, err := http.NewRequestWithContext(ctx, method, target, body)
 	if err != nil {
 		return err
 	}
@@ -65,7 +105,7 @@ func (c *Client) do(ctx context.Context, method, url string, in any, user, pass 
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("%s %s: %s: %s", method, url, resp.Status, bytes.TrimSpace(msg))
+		return &StatusError{Code: resp.StatusCode, Msg: fmt.Sprintf("%s %s: %s: %s", method, target, resp.Status, bytes.TrimSpace(msg))}
 	}
 	if out == nil {
 		return nil
