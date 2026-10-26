@@ -1,0 +1,149 @@
+name: hw-1
+
+on:
+  pull_request:
+    paths:
+      - hw-1/**
+      - .github/workflows/hw-1.yml
+  push:
+    branches: [main, ddia-hw-1]
+    paths:
+      - hw-1/**
+      - .github/workflows/hw-1.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hw-1-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: hw-1
+
+jobs:
+  go:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: hw-1/go.mod
+          cache-dependency-path: hw-1/go.sum
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: vet
+        run: go vet ./...
+      - name: test
+        run: go test -race ./...
+      - uses: golangci/golangci-lint-action@v9.3.0
+        with:
+          version: v2.15.0
+          working-directory: hw-1
+
+  docker:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: hadolint/hadolint-action@v3.5.0
+        with:
+          dockerfile: hw-1/Dockerfile
+      - name: env
+        run: cp .env.example .env
+      - name: compose config
+        run: docker compose config -q
+      - name: promtool
+        run: docker run --rm -v "$PWD/prometheus:/cfg:ro" --entrypoint promtool prom/prometheus:v3.15.1 check config /cfg/prometheus.yml
+      - name: compose up
+        run: docker compose up -d --build
+        env:
+          LOAD_RAMP: 20s
+      - name: dashgen
+        run: |
+          code=$(timeout 180 docker wait "$(docker compose ps -aq dashgen)")
+          docker compose logs dashgen
+          test "$code" = 0
+      - name: smoke
+        run: |
+          # FAIL_RATE даёт случайные 500, их повторяем
+          req() {
+            for _ in 1 2 3 4 5; do
+              code=$(curl -s -o /tmp/body -w '%{http_code}' "$@")
+              [ "$code" != 500 ] && { echo "$code"; return; }
+            done
+            echo 500
+          }
+          for port in 8081 8082; do
+            test "$(req "localhost:$port/health")" = 200
+            test "$(req -X POST "localhost:$port/items" -d '{"name":"smoke"}')" = 201
+            test "$(req "localhost:$port/items/999999999")" = 404
+            curl -sSf "localhost:$port/handlers" | grep -q '"route":"/items/{id}"'
+          done
+          curl -sSf localhost:8081/metrics | grep 'http_server_requests_total{code="404",datacenter="dc-a",method="GET",pod="pod-1",route="/items/{id}"}'
+          curl -sSf localhost:8082/metrics | grep 'http_server_requests_total{code="404",datacenter="dc-b",method="GET",pod="pod-2",route="/items/{id}"}'
+      - name: prometheus targets
+        run: |
+          for _ in $(seq 30); do
+            up=$(curl -s localhost:9090/api/v1/targets | jq '[.data.activeTargets[] | select(.health == "up")] | length')
+            [ "$up" = 2 ] && exit 0
+            sleep 2
+          done
+          curl -s localhost:9090/api/v1/targets | jq .
+          exit 1
+      - name: grafana datasource
+        run: |
+          set -a; . ./.env; set +a
+          auth="$GRAFANA_ADMIN_USER:$GRAFANA_ADMIN_PASSWORD"
+          curl -sSf -u "$auth" localhost:3000/api/datasources/uid/prometheus | jq -e '.url == "http://prometheus:9090"'
+          # плагин prometheus в grafana 13 доустанавливается в фоне после старта
+          for _ in $(seq 30); do
+            curl -s -u "$auth" localhost:3000/api/datasources/uid/prometheus/health | jq -e '.status == "OK"' && exit 0
+            sleep 2
+          done
+          exit 1
+      - name: grafana dashboard
+        run: |
+          set -a; . ./.env; set +a
+          auth="$GRAFANA_ADMIN_USER:$GRAFANA_ADMIN_PASSWORD"
+          handlers=$(curl -sSf localhost:8081/handlers | jq '.handlers | length')
+          curl -sSf -u "$auth" localhost:3000/api/dashboards/uid/hw1-handlers | jq -e --argjson n "$handlers" '
+            .dashboard.editable == false and
+            ([.dashboard.panels[] | select(.type == "row")] | length) == $n and
+            ([.dashboard.panels[] | select(.type == "timeseries")] | length) == 3 * $n and
+            ([.dashboard.templating.list[].name] | sort) == ["datacenter", "pod"] and
+            all(.dashboard.panels[] | select(.type == "timeseries") | .targets[]; .datasource.uid == "prometheus")'
+          viewer="$GRAFANA_VIEWER_USER:$GRAFANA_VIEWER_PASSWORD"
+          curl -sSf -u "$viewer" localhost:3000/api/dashboards/uid/hw1-handlers | jq -e '.meta.canEdit == false and .meta.canSave == false'
+          curl -sSf -u "$viewer" localhost:3000/api/dashboards/home | jq -e '.redirectUri | startswith("/d/hw1-handlers")'
+      - name: load
+        run: |
+          q() { curl -s localhost:9090/api/v1/query --data-urlencode "query=$1" | jq -r '.data.result | length'; }
+          for _ in $(seq 30); do
+            pods=$(q 'sum by (pod) (rate(http_server_requests_total[1m]) > 0)')
+            routes=$(q 'sum by (method, route) (rate(http_server_requests_total[1m]) > 0)')
+            codes=$(q 'sum by (code) (increase(http_server_requests_total{code=~"404|500"}[2m]) > 0)')
+            echo "pods=$pods routes=$routes codes=$codes"
+            [ "$pods" = 2 ] && [ "$routes" = 3 ] && [ "$codes" = 2 ] && exit 0
+            sleep 5
+          done
+          docker compose logs load
+          exit 1
+      - name: logs
+        if: failure()
+        run: docker compose logs
+      - name: compose down
+        if: always()
+        run: docker compose down -v
+
+  actionlint:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: actionlint
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
+          ./actionlint -color
