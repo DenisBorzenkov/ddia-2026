@@ -86,6 +86,8 @@ services:
       GRAFANA_URL: http://grafana:3000
       GRAFANA_ADMIN_USER: ${GRAFANA_ADMIN_USER:?set in .env}
       GRAFANA_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set in .env}
+      GRAFANA_VIEWER_USER: ${GRAFANA_VIEWER_USER:?set in .env}
+      GRAFANA_VIEWER_PASSWORD: ${GRAFANA_VIEWER_PASSWORD:?set in .env}
       DATASOURCE_UID: prometheus
     depends_on:
       app-1:

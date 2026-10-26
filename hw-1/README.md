@@ -11,8 +11,9 @@ cp .env.example .env
 docker compose up
 ```
 
-Через 2-3 минуты нагрузка выходит на полку, дашборд - <http://localhost:3000/d/hw1-handlers>
-(логин и пароль из `.env`).
+Через 2-3 минуты нагрузка выходит на полку, дашборд - <http://localhost:3000> (он домашний).
+Смотреть под `GRAFANA_VIEWER_USER` из `.env`: у этого пользователя роль Viewer, дашборд только
+на просмотр.
 
 | Сервис | Порт | Что это |
 | --- | --- | --- |
@@ -89,7 +90,14 @@ middleware, служебные `/health`, `/metrics`, `/handlers` - на кор�
 | Ошибки | `sum by (code) (rate(http_server_requests_total{..., code=~"4..\|5.."}[$__rate_interval]))` |
 
 Селекторы `datacenter` и `pod` - multi-value с All, `pod` фильтруется по выбранным датацентрам.
-Дашборд `editable: false`.
+
+Дашборд нельзя править:
+
+* `editable: false` в JSON;
+* `dashgen` заводит пользователя `GRAFANA_VIEWER_USER` с ролью Viewer: у него нет кнопок
+  Edit и Make editable, API отвечает `canEdit: false`. Админ в Grafana может всё, поэтому
+  дашборд смотрим под viewer;
+* дашборд домашний для организации: после входа открывается сразу он.
 
 Список ручек в генераторе не хранится: добавить ручку в `api.Routes`, перезапустить стек -
 появится новая строка.
@@ -107,7 +115,8 @@ k6, `ramping-arrival-rate` (`load/load.js`): за `LOAD_RAMP` (3 мин) от 1 
 
 ## Секреты
 
-Пароль админа Grafana только в `.env`, он в `.gitignore`. В репозитории `.env.example`.
+Логины и пароли админа и viewer в Grafana только в `.env`, он в `.gitignore`. В репозитории
+`.env.example`.
 Без `.env` compose падает с ошибкой.
 
 ## CI
@@ -117,6 +126,7 @@ k6, `ramping-arrival-rate` (`load/load.js`): за `LOAD_RAMP` (3 мин) от 1 
 * `go` - gofmt, go vet, `go test -race`, golangci-lint;
 * `docker` - hadolint, `promtool check config`, весь стек через `docker compose up`, затем
   проверки: ручки и метрики обоих экземпляров, таргеты Prometheus, datasource и дашборд в
-  Grafana (non-editable, по 3 панели на каждую ручку из `/handlers`), нагрузка доходит до
+  Grafana (non-editable, по 3 панели на каждую ручку из `/handlers`, у viewer нет прав на
+  правку), нагрузка доходит до
   всех ручек и подов, видны 404 и 500;
 * `actionlint`.

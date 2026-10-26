@@ -51,6 +51,17 @@ func run(ctx context.Context) error {
 		return err
 	}
 	slog.Info("dashboard uploaded", "uid", opts.UID, "url", g.URL+"/d/"+opts.UID)
+
+	if err := g.SetHome(ctx, opts.UID); err != nil {
+		return err
+	}
+	// под этим пользователем дашборд только на просмотр: у Viewer нет прав на правку
+	if login := os.Getenv("GRAFANA_VIEWER_USER"); login != "" {
+		if err := g.EnsureViewer(ctx, login, os.Getenv("GRAFANA_VIEWER_PASSWORD")); err != nil {
+			return err
+		}
+		slog.Info("viewer ready", "login", login)
+	}
 	return nil
 }
 

@@ -113,6 +113,9 @@ jobs:
             ([.dashboard.panels[] | select(.type == "timeseries")] | length) == 3 * $n and
             ([.dashboard.templating.list[].name] | sort) == ["datacenter", "pod"] and
             all(.dashboard.panels[] | select(.type == "timeseries") | .targets[]; .datasource.uid == "prometheus")'
+          viewer="$GRAFANA_VIEWER_USER:$GRAFANA_VIEWER_PASSWORD"
+          curl -sSf -u "$viewer" localhost:3000/api/dashboards/uid/hw1-handlers | jq -e '.meta.canEdit == false and .meta.canSave == false'
+          curl -sSf -u "$viewer" localhost:3000/api/dashboards/home | jq -e '.redirectUri | startswith("/d/hw1-handlers")'
       - name: load
         run: |
           q() { curl -s localhost:9090/api/v1/query --data-urlencode "query=$1" | jq -r '.data.result | length'; }
