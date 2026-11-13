@@ -42,6 +42,67 @@ jobs:
           version: v2.15.0
           working-directory: hw-2
 
+  docker:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: hadolint/hadolint-action@v3.5.0
+        with:
+          dockerfile: hw-2/Dockerfile
+      - name: env
+        run: cp .env.example .env
+      - name: compose config
+        run: docker compose config -q
+      - name: compose up
+        run: docker compose up -d --build
+      - name: kafka-init
+        run: |
+          code=$(timeout 300 docker wait "$(docker compose ps -aq kafka-init)")
+          docker compose logs kafka-init
+          test "$code" = 0
+      - name: topics
+        run: |
+          describe() {
+            docker compose exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka-1 \
+              /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:19092 --describe --topic "$1"
+          }
+          describe events | tee /tmp/events
+          grep -q 'PartitionCount: 3.*ReplicationFactor: 3.*min.insync.replicas=2' /tmp/events
+          describe events.dlt | tee /tmp/dlt
+          grep -q 'PartitionCount: 3.*ReplicationFactor: 3' /tmp/dlt
+          docker compose exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka-1 \
+            /opt/kafka/bin/kafka-configs.sh --bootstrap-server kafka-1:19092 --describe --entity-type brokers --entity-name 1 --all \
+            | grep -q '^ *auto.create.topics.enable=false'
+      - name: pipeline
+        run: |
+          sql() { docker compose exec -T postgres psql -U events -d events -tAc "$1"; }
+          dlt() {
+            docker compose exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka-1 \
+              /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server kafka-1:19092 --topic events.dlt \
+              | awk -F: '{ s += $3 } END { print s + 0 }'
+          }
+          for _ in $(seq 18); do
+            producers=$(sql 'SELECT count(DISTINCT producer_id) FROM events')
+            consumers=$(sql 'SELECT count(DISTINCT consumer_id) FROM events')
+            dlt=$(dlt)
+            echo "producers=$producers consumers=$consumers dlt=$dlt"
+            [ "$producers" = 3 ] && [ "$consumers" = 3 ] && [ "$dlt" -gt 0 ] && exit 0
+            sleep 5
+          done
+          exit 1
+      - name: verify
+        run: |
+          docker compose stop producer-1 producer-2 producer-3
+          docker compose run --rm verify verify -wait=2m | tee /tmp/verify
+          head -1 /tmp/verify | grep -q '^DenisBorzenkov '
+          grep -q '^OK' /tmp/verify
+      - name: logs
+        if: failure()
+        run: docker compose logs
+      - name: compose down
+        if: always()
+        run: docker compose down -v
+
   actionlint:
     runs-on: ubuntu-24.04
     defaults:
