@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -62,7 +63,9 @@ func run(log *slog.Logger) error {
 	m := consumer.NewMetrics(env.Registerer(pod))
 	env.ServeMetrics(env.String("METRICS_ADDR", ":2112"), log)
 
+	owner, _ := strconv.ParseFloat(id, 64) // для метрики, у нечислового id будет 0
 	g := &consumer.Group{
+		Owner:   owner,
 		Topic:   topic,
 		MaxPoll: maxPoll,
 		Offsets: consumer.NewOffsets(),

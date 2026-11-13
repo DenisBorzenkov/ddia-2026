@@ -74,8 +74,8 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Buckets: prometheus.ExponentialBuckets(0.01, 2, 15),
 		}),
 		Assigned: f.NewGaugeVec(prometheus.GaugeOpts{
-			Name: "consumer_partition_assigned",
-			Help: "1 if the partition is assigned to this consumer.",
+			Name: "consumer_partition_owner",
+			Help: "Consumer number while the partition is assigned to it, 0 otherwise.",
 		}, []string{"partition"}),
 		Rebalances: f.NewCounterVec(prometheus.CounterOpts{
 			Name: "consumer_rebalance_events_total",
