@@ -3,7 +3,7 @@ name: hw2
 x-kafka: &kafka
   image: apache/kafka:4.4.0
   restart: unless-stopped
-  mem_limit: 768m
+  mem_limit: 640m
   environment: &kafka-env
     CLUSTER_ID: hzMsQLMxR1GaVpc_yBrk3w
     KAFKA_PROCESS_ROLES: broker,controller
@@ -20,7 +20,7 @@ x-kafka: &kafka
     KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
     KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
     KAFKA_LOG_DIRS: /var/lib/kafka/data
-    KAFKA_HEAP_OPTS: -Xmx384m -Xms384m
+    KAFKA_HEAP_OPTS: -Xmx256m -Xms256m
   healthcheck:
     test: ["CMD", "nc", "-z", "localhost", "19092"]
     interval: 5s
@@ -64,6 +64,7 @@ x-consumer: &consumer
     PROCESSING_DELAY_MS: ${PROCESSING_DELAY_MS:-15}
     MAX_ATTEMPTS: 3
     MAX_POLL_RECORDS: 100
+    COMMIT_INTERVAL: 2s
     SESSION_TIMEOUT: 15s
 
 services:

@@ -47,6 +47,10 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	commitInterval, err := env.Duration("COMMIT_INTERVAL", 2*time.Second)
+	if err != nil {
+		return err
+	}
 	topic := env.String("TOPIC", "events")
 	dltTopic := env.String("DLT_TOPIC", "events.dlt")
 	group := env.String("GROUP", "events-processor")
@@ -65,12 +69,13 @@ func run(log *slog.Logger) error {
 
 	owner, _ := strconv.ParseFloat(id, 64) // для метрики, у нечислового id будет 0
 	g := &consumer.Group{
-		Owner:   owner,
-		Topic:   topic,
-		MaxPoll: maxPoll,
-		Offsets: consumer.NewOffsets(),
-		Metrics: m,
-		Log:     log,
+		Owner:          owner,
+		CommitInterval: commitInterval,
+		Topic:          topic,
+		MaxPoll:        maxPoll,
+		Offsets:        consumer.NewOffsets(),
+		Metrics:        m,
+		Log:            log,
 	}
 	opts := append([]kgo.Opt{
 		kgo.SeedBrokers(env.List("KAFKA_BROKERS", "localhost:9092")...),
