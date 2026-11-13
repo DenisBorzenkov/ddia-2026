@@ -21,6 +21,8 @@ import (
 type Group struct {
 	Topic   string
 	MaxPoll int
+	// Owner - номер консьюмера, значение метрики consumer_partition_owner для его партиций.
+	Owner   float64
 	Proc    *Processor
 	Offsets *Offsets
 	Metrics *Metrics
@@ -51,7 +53,7 @@ func (g *Group) assigned(_ context.Context, _ *kgo.Client, m map[string][]int32)
 	}
 	for _, p := range ps {
 		g.fresh[p] = true
-		g.Metrics.Assigned.WithLabelValues(strconv.Itoa(int(p))).Set(1)
+		g.Metrics.Assigned.WithLabelValues(strconv.Itoa(int(p))).Set(g.Owner)
 	}
 	g.mu.Unlock()
 	g.Log.Info("partitions assigned", "partitions", ps)

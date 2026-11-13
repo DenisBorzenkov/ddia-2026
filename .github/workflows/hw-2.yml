@@ -53,6 +53,8 @@ jobs:
         run: cp .env.example .env
       - name: compose config
         run: docker compose config -q
+      - name: promtool
+        run: docker run --rm -v "$PWD/prometheus:/cfg:ro" --entrypoint promtool prom/prometheus:v3.15.1 check config /cfg/prometheus.yml
       - name: compose up
         run: docker compose up -d --build
       - name: kafka-init
@@ -90,6 +92,42 @@ jobs:
             sleep 5
           done
           exit 1
+      - name: prometheus targets
+        run: |
+          for _ in $(seq 30); do
+            up=$(curl -s localhost:9090/api/v1/targets | jq '[.data.activeTargets[] | select(.health == "up")] | length')
+            [ "$up" = 7 ] && exit 0
+            sleep 2
+          done
+          curl -s localhost:9090/api/v1/targets | jq .
+          exit 1
+      - name: metrics
+        run: |
+          q() { curl -s localhost:9090/api/v1/query --data-urlencode "query=$1" | jq -r '.data.result | length'; }
+          for _ in $(seq 30); do
+            producers=$(q 'sum by (pod) (rate(producer_events_acked_total[1m]) > 0)')
+            consumers=$(q 'sum by (pod) (rate(consumer_events_total{result="ok"}[1m]) > 0)')
+            lag=$(q 'kafka_consumergroup_lag{consumergroup="events-processor", topic="events"}')
+            leaders=$(q 'kafka_topic_partition_leader{topic="events"} > 0')
+            echo "producers=$producers consumers=$consumers lag=$lag leaders=$leaders"
+            [ "$producers" = 3 ] && [ "$consumers" = 3 ] && [ "$lag" = 3 ] && [ "$leaders" = 3 ] && exit 0
+            sleep 5
+          done
+          exit 1
+      - name: grafana
+        run: |
+          set -a; . ./.env; set +a
+          auth="$GRAFANA_ADMIN_USER:$GRAFANA_ADMIN_PASSWORD"
+          for _ in $(seq 30); do
+            curl -s -u "$auth" localhost:3000/api/datasources/uid/prometheus/health | jq -e '.status == "OK"' && break
+            sleep 2
+          done
+          curl -sSf -u "$auth" localhost:3000/api/datasources/uid/prometheus/health | jq -e '.status == "OK"'
+          # анонимный просмотр без прав на правку
+          curl -sSf localhost:3000/api/dashboards/uid/hw2-kafka | jq -e '
+            .meta.canEdit == false and
+            ([.dashboard.panels[] | select(.type != "row")] | length) >= 12 and
+            all(.dashboard.panels[] | select(.type != "row") | .targets[]; .datasource.uid == "prometheus")'
       - name: verify
         run: |
           docker compose stop producer-1 producer-2 producer-3
