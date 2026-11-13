@@ -828,7 +828,7 @@
     {
       "id": 17,
       "type": "timeseries",
-      "title": "Сообщений в топиках/с",
+      "title": "Записей в партиции/с",
       "description": "",
       "datasource": {
         "type": "prometheus",
@@ -847,8 +847,17 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (topic) (rate(kafka_topic_partition_current_offset{topic=~\"events.*\"}[$__rate_interval]))",
-          "legendFormat": "{{topic}}"
+          "expr": "sum by (partition) (rate(kafka_topic_partition_current_offset{topic=\"events\"}[$__rate_interval]))",
+          "legendFormat": "events p{{partition}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(kafka_topic_partition_current_offset{topic=\"events.dlt\"}[$__rate_interval]))",
+          "legendFormat": "events.dlt"
         }
       ],
       "fieldConfig": {
