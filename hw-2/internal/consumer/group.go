@@ -41,6 +41,9 @@ func (g *Group) Opts() []kgo.Opt {
 
 func (g *Group) assigned(_ context.Context, _ *kgo.Client, m map[string][]int32) {
 	ps := m[g.Topic]
+	if len(ps) == 0 {
+		return
+	}
 	g.Metrics.Rebalances.WithLabelValues("assigned").Inc()
 	g.mu.Lock()
 	if g.fresh == nil {
@@ -58,6 +61,9 @@ func (g *Group) assigned(_ context.Context, _ *kgo.Client, m map[string][]int32)
 // синхронно до того, как клиент продолжит ребаланс.
 func (g *Group) revoked(ctx context.Context, cl *kgo.Client, m map[string][]int32) {
 	ps := m[g.Topic]
+	if len(ps) == 0 {
+		return
+	}
 	g.Metrics.Rebalances.WithLabelValues("revoked").Inc()
 	pending := g.Offsets.Pending(ps...)
 	err := g.commit(ctx, cl, pending)
@@ -69,6 +75,9 @@ func (g *Group) revoked(ctx context.Context, cl *kgo.Client, m map[string][]int3
 // Коммитить нельзя: оффсеты перезаписали бы коммиты нового владельца.
 func (g *Group) lost(_ context.Context, _ *kgo.Client, m map[string][]int32) {
 	ps := m[g.Topic]
+	if len(ps) == 0 {
+		return
+	}
 	g.Metrics.Rebalances.WithLabelValues("lost").Inc()
 	g.Log.Warn("partitions lost, not committing", "partitions", ps, "dropped", offsetsLog(g.Offsets.Pending(ps...)))
 	g.forget(ps)
