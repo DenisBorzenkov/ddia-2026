@@ -13,7 +13,8 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// Group - цикл консьюмера в группе: poll, обработка, синхронный коммит обработанного.
+// Group - цикл консьюмера в группе: poll, обработка, периодический синхронный коммит
+// обработанного.
 //
 // Клиент создаётся с kgo.DisableAutoCommit и kgo.BlockRebalanceOnPoll: пока обрабатывается
 // пачка из PollRecords, ребаланс ждёт AllowRebalance. Оффсеты коммитятся только из Offsets,
@@ -21,6 +22,8 @@ import (
 type Group struct {
 	Topic   string
 	MaxPoll int
+	// CommitInterval - как часто коммитить обработанное.
+	CommitInterval time.Duration
 	// Owner - номер консьюмера, значение метрики consumer_partition_owner для его партиций.
 	Owner   float64
 	Proc    *Processor
@@ -125,17 +128,24 @@ func (g *Group) commit(ctx context.Context, cl *kgo.Client, pending map[int32]kg
 	return nil
 }
 
-// Run читает и обрабатывает записи, пока ctx не отменён.
+// Run читает и обрабатывает записи, пока ctx не отменён. Обработанное коммитится не
+// чаще раза в CommitInterval (и при каждом отзыве партиций - в OnPartitionsRevoked).
+// Poll ограничен тем же интервалом, чтобы хвост коммитился и без новых записей.
 func (g *Group) Run(ctx context.Context, cl *kgo.Client) {
+	last := time.Now()
 	for {
-		fetches := cl.PollRecords(ctx, g.MaxPoll)
+		pctx, cancel := context.WithTimeout(ctx, g.CommitInterval)
+		fetches := cl.PollRecords(pctx, g.MaxPoll)
+		cancel()
 		if fetches.IsClientClosed() || ctx.Err() != nil {
 			g.Commit(cl)
 			cl.AllowRebalance()
 			return
 		}
 		fetches.EachError(func(t string, p int32, err error) {
-			g.Log.Warn("fetch", "topic", t, "partition", p, "err", err)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				g.Log.Warn("fetch", "topic", t, "partition", p, "err", err)
+			}
 		})
 
 		aborted := false
@@ -147,7 +157,10 @@ func (g *Group) Run(ctx context.Context, cl *kgo.Client) {
 			}
 			g.Offsets.Mark(r)
 		}
-		g.Commit(cl)
+		if aborted || time.Since(last) >= g.CommitInterval {
+			g.Commit(cl)
+			last = time.Now()
+		}
 		cl.AllowRebalance()
 		if aborted {
 			return
