@@ -45,7 +45,7 @@ mark recovered
 
 stop_and_verify "$RESULTS/2.txt" 5m
 
-logs_grep 'batch in a produce request failed|produce failed|"stats"|"stopped"|moving producing partition' \
+logs_grep 'produce batch rejected|batch in a produce request failed|produce failed|"stats"|"stopped"|moving producing partition' \
   "$RESULTS/2-producers.log" producer-1 producer-2 producer-3
 logs_grep '"level":"(WARN|ERROR)"|partitions (assigned|revoked|lost)|partition resumed' "$RESULTS/2-consumers.log" \
   consumer-1 consumer-2 consumer-3
