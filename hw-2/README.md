@@ -85,8 +85,10 @@ Value записи - JSON:
   умолчанию, `kgo.DisableIdempotentWrite` не вызывается): брокер отбрасывает повторы батча после
   ретрая, порядок в партиции сохраняется.
 * Ретраибельные ошибки брокера на батч (`NOT_ENOUGH_REPLICAS`, `REQUEST_TIMED_OUT` и т.п.)
-  клиент повторяет сам, без ограничения числа попыток. Каждая такая ошибка пишется в лог
-  (`batch in a produce request failed` с кодом) и считается в `producer_batch_errors_total{code}`.
+  клиент повторяет сам, без ограничения числа попыток, и сообщает о них только в debug-сводке
+  produce-запроса. Адаптер логгера (`internal/kafkalog`) разбирает эту сводку: каждый
+  отклонённый батч - строка `produce batch rejected, retrying` (партиция, число записей, код) и
+  `producer_batch_errors_total{code}`; остальной debug в лог не идёт.
   Смену лидера (`NOT_LEADER_FOR_PARTITION` с подсказкой нового лидера) и недоступный брокер клиент
   обрабатывает отдельно: в логе `moving producing partition ...`, `unable to open connection`,
   `metadata update triggered`.
