@@ -1,0 +1,2 @@
+
+# 10:37:47 kafka-topics.sh --describe через kafka-1: нет ответа за 30 с (timeout 30, код 124)
