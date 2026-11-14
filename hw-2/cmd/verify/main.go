@@ -89,26 +89,43 @@ func run(log *slog.Logger, wait time.Duration) (bool, error) {
 	return r.OK(), nil
 }
 
-// waitLag ждёт нулевой lag группы не дольше wait и возвращает последний lag (-1, если
-// посчитать не удалось).
+// waitLag ждёт, пока группа догонит топик: два замера подряд группа Stable и lag 0 по
+// всем партициям (verify.Settled). Ждёт не дольше wait, возвращает последний lag
+// (-1, если по какой-то партиции lag неизвестен).
 func waitLag(ctx context.Context, adm *kadm.Client, group string, wait time.Duration, log *slog.Logger) int64 {
 	deadline := time.Now().Add(wait)
+	var history []verify.LagState
 	for {
-		lag := int64(-1)
-		lags, err := adm.Lag(ctx, group)
-		if err == nil {
-			err = lags.Error()
-		}
-		if err == nil {
-			lag = lags[group].Lag.Total()
-		} else {
-			log.Warn("lag", "err", err)
-		}
-		if lag == 0 || time.Now().After(deadline) {
-			return lag
+		st := measureLag(ctx, adm, group, log)
+		history = append(history, st)
+		if wait <= 0 || verify.Settled(history) || time.Now().After(deadline) {
+			return st.Total
 		}
 		time.Sleep(2 * time.Second)
 	}
+}
+
+// measureLag - один замер: состояние группы и lag каждой партиции.
+func measureLag(ctx context.Context, adm *kadm.Client, group string, log *slog.Logger) verify.LagState {
+	lags, err := adm.Lag(ctx, group)
+	if err == nil {
+		err = lags.Error()
+	}
+	if err != nil {
+		log.Warn("lag", "err", err)
+		return verify.LagState{Total: -1}
+	}
+	g := lags[group]
+	var parts []verify.PartitionLag
+	for _, ps := range g.Lag {
+		for _, p := range ps {
+			if p.Err != nil {
+				log.Warn("lag", "topic", p.Topic, "partition", p.Partition, "err", p.Err)
+			}
+			parts = append(parts, verify.PartitionLag{Lag: p.Lag, Err: p.Err})
+		}
+	}
+	return verify.EvalLag(g.State, parts)
 }
 
 func sinkRows(ctx context.Context, pool *pgxpool.Pool) ([]verify.Row, error) {
