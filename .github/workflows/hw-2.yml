@@ -87,9 +87,9 @@ jobs:
             # таблицу создаёт консьюмер при старте, до этого запрос падает
             producers=$(sql 'SELECT count(DISTINCT producer_id) FROM events' || echo 0)
             consumers=$(sql 'SELECT count(DISTINCT consumer_id) FROM events' || echo 0)
-            dlt=$(dlt || echo 0)
+            dlt=$(dlt || true)
             echo "producers=$producers consumers=$consumers dlt=$dlt"
-            [ "$producers" = 3 ] && [ "$consumers" = 3 ] && [ "$dlt" -gt 0 ] && exit 0
+            [ "$producers" = 3 ] && [ "$consumers" = 3 ] && [ "${dlt:-0}" -gt 0 ] && exit 0
             sleep 5
           done
           exit 1
