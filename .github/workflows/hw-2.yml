@@ -84,9 +84,10 @@ jobs:
               | awk -F: '{ s += $3 } END { print s + 0 }'
           }
           for _ in $(seq 18); do
-            producers=$(sql 'SELECT count(DISTINCT producer_id) FROM events')
-            consumers=$(sql 'SELECT count(DISTINCT consumer_id) FROM events')
-            dlt=$(dlt)
+            # таблицу создаёт консьюмер при старте, до этого запрос падает
+            producers=$(sql 'SELECT count(DISTINCT producer_id) FROM events' || echo 0)
+            consumers=$(sql 'SELECT count(DISTINCT consumer_id) FROM events' || echo 0)
+            dlt=$(dlt || echo 0)
             echo "producers=$producers consumers=$consumers dlt=$dlt"
             [ "$producers" = 3 ] && [ "$consumers" = 3 ] && [ "$dlt" -gt 0 ] && exit 0
             sleep 5
