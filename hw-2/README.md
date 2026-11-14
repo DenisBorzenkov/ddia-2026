@@ -326,9 +326,10 @@ OK: потерь нет
 * До kill (`1-groups-before.txt`): `p0` - consumer-3, `p1` - consumer-1, `p2` - consumer-2;
   закоммиченный оффсет `p2` - 2038, log-end - 2056.
 * consumer-2 завершился с кодом 137, Docker его не перезапускал (`1-container.txt`).
-* kill в 16:21:44; через 15,9 с (`SESSION_TIMEOUT=15s`) - ребаланс: consumer-1 получил `p2`
-  (`partitions assigned [2]`), чтение `p2` продолжилось с оффсета 2038 (`partition resumed`).
-  consumer-1 и consumer-3 свои партиции не отдавали, `partitions revoked` у них нет.
+* kill в 16:21:44 (`1-times.env`); через 15,7 с (`SESSION_TIMEOUT=15s`, назначение в
+  16:21:59.7) - ребаланс: consumer-1 получил `p2` (`partitions assigned [2]`), чтение `p2`
+  продолжилось с оффсета 2038 (`partition resumed`). consumer-1 и consumer-3 свои партиции не
+  отдавали, `partitions revoked` у них нет.
 * `duplicates`: 57 строк, все у consumer-1 по `p2`, оффсеты 2038-2095 (`1-duplicates.txt`).
 * В `events.dlt` 307 записей на 306 уникальных событий: одно poison-событие из этого диапазона
   опубликовано в DLT дважды.
@@ -342,7 +343,7 @@ OK: потерь нет
 
 <!-- вывод -->
 
-### 2. Стоп kafka-1, затем kafka-2
+### 2. Отказ брокеров: min.insync.replicas и кворум KRaft
 
 #### Гипотеза
 
@@ -354,69 +355,91 @@ OK: потерь нет
 ./experiments/2-brokers-down.sh
 ```
 
-60 с нагрузки, `docker compose stop kafka-1`, 45 с, `docker compose stop kafka-2`, 60 с,
-`docker compose start kafka-1 kafka-2`, 90 с, остановка продюсеров, `verify -wait=5m`.
-`kafka-topics.sh --describe` до, после первого стопа, с одним брокером и после возврата
-(`2-describe-*.txt`).
+| Шаг | Команда | Пауза |
+| --- | --- | --- |
+| нагрузка | - | 60 с |
+| A1. стоп kafka-1 | `docker compose stop kafka-1` | 45 с |
+| A2. живых реплик меньше `min.insync.replicas` | `kafka-configs.sh --alter --entity-type topics --entity-name events --add-config min.insync.replicas=3` | 40 с |
+| A3. вернуть | то же с `min.insync.replicas=2` | 30 с |
+| B. стоп kafka-2 (один узел, кворум KRaft потерян) | `docker compose stop kafka-2` | 60 с |
+| возврат | `docker compose start kafka-1 kafka-2` | 90 с |
+| проверка | остановка продюсеров, `verify -wait=5m` | - |
+
+Между шагами - `kafka-topics.sh --describe` (`2-describe-*.txt`), при одном узле и после
+возврата - `kafka-metadata-quorum.sh describe --status` (`2-quorum-*.txt`). Отметки времени -
+`2-times.env`, выдержки логов - `2-producers.log`, `2-consumers.log`.
 
 #### Результат
 
 ```text
-DenisBorzenkov Fri Nov 13 19:31:35 MSK 2026
+DenisBorzenkov Sat Nov 14 13:41:57 MSK 2026
 
 ПРОВЕРКА                           ЗНАЧЕНИЕ
 пользователей                      150
-событий в sink                     26546
-записей в events.dlt (уникальных)  581 (581)
+событий в sink                     33736
+записей в events.dlt (уникальных)  739 (695)
 lag группы                         0
-сумма max seq по пользователям     27127
-уникальных seq в sink + dlt        27127
+сумма max seq по пользователям     34431
+уникальных seq в sink + dlt        34431
 потеряно seq (пользователей)       0 (0)
-отброшено дублей по event_id       0
+отброшено дублей по event_id       2077
 повторов seq с другим event_id     0
 seq и в sink, и в dlt              0
 нарушений порядка (пользователей)  0 (0)
 poison в sink                      0
 
 КОНСЬЮМЕР   СОБЫТИЙ В SINK
-consumer-1  8453
-consumer-2  8495
-consumer-3  9598
+consumer-1  10978
+consumer-2  11916
+consumer-3  10842
 
 ПРОДЮСЕР    СОБЫТИЙ В SINK
-producer-1  8829
-producer-2  8867
-producer-3  8850
+producer-1  11249
+producer-2  11239
+producer-3  11248
 
 ПАРТИЦИЯ  СОБЫТИЙ В SINK
-0         8726
-1         8061
-2         9759
+0         11091
+1         10291
+2         12354
 
 OK: потерь нет
 ```
 
-![продюсеры](docs/img/2-producers.png)
+![продюсеры: подтверждения, ошибки по коду, буфер](docs/img/2-producers.png)
 ![lag, лидеры и ISR](docs/img/2-kafka.png)
 
-| Момент (UTC) | Лидеры `events` p0 / p1 / p2 | ISR | Продюсеры | Консьюмеры |
-| --- | --- | --- | --- | --- |
-| до | 1 / 2 / 3 | 1,2,3 | 30 событий/с каждый | по одной партиции |
-| 16:27:10 стоп kafka-1 | 2 / 2 / 3 | 2,3 | клиент перевёл `p0` на kafka-2 по подсказке брокера (`moving producing partition due to kip-951 not_leader_for_partition`), подтверждения не прерывались | без ошибок |
-| 16:28:02 стоп kafka-2 | 3 / 3 / 3 (по exporter) | по exporter 1 | `p1` переведена на kafka-3, дальше ни одного подтверждения до 16:29:40: `acked` стоит, `buffered` растёт до ~2,9 тыс. на продюсер, в логе `metadata update triggered ... produce request had retry batches`, ошибок `produce failed` нет | коммиты падают (`context deadline exceeded`, `unable to dial`), в 16:28:27-35 все трое - `partitions lost, not committing`, `COORDINATOR_NOT_AVAILABLE` |
-| 16:29:36 старт kafka-1, kafka-2 | 3 / 3 / 3 | 1,2,3 с 16:29:42 | буфер досылается за ~10 с (до ~220 подтверждений/с на продюсер), дальше 30 событий/с | 16:29:42 новое назначение: `p0` - consumer-1 с 3419, `p1` - consumer-2 с 3175, `p2` - consumer-3 с 3719; lag до ~3,5 тыс. и обратно в 0 |
+| Момент (UTC) | Лидеры `events` p0 / p1 / p2, ISR | Продюсеры | Консьюмеры |
+| --- | --- | --- | --- |
+| до | 1 / 2 / 3, ISR 1,2,3 | 30 событий/с каждый | по одной партиции |
+| 10:31:31 A1 стоп kafka-1 | 2 / 2 / 3, ISR 2,3 (`2-describe-1`) | по одному `NOT_LEADER_FOR_PARTITION`, клиент перевёл `p0` на kafka-2 (`moving producing partition due to kip-951`), подтверждения не прерывались | без ошибок |
+| 10:32:25 A2 `min.insync.replicas=3` | без изменений, ISR 2,3 < 3 (`2-describe-2`) | брокеры отклоняют все батчи: `produce batch rejected, retrying ... NOT_ENOUGH_REPLICAS` с 10:32:27 по 10:33:07 по всем трём партициям; `acked` стоит, `buffered` растёт до ~1260 на продюсер; `failed` 0 | читают то, что уже записано, lag растёт до ~1,4 тыс. |
+| 10:33:09 A3 `min.insync.replicas=2` | без изменений | буфер досылается за ~10 с (до ~100 подтверждений/с), дальше 30 событий/с | догоняют |
+| 10:33:41 B стоп kafka-2 | 3 / 3 / 3, по exporter ISR 1 и under-replicated | `NOT_LEADER_FOR_PARTITION` на `p1`, затем с 10:33:51 по 10:36:15 `NOT_ENOUGH_REPLICAS` от kafka-3 по всем партициям и 3 `REQUEST_TIMED_OUT` на `p2`; `acked` стоит ~2,5 мин, `buffered` до ~4040 на продюсер; `failed` 0 | lag до ~5,6 тыс. |
+| 10:35:45 возврат | 3 / 3 / 3, ISR 3 | буфер досылается к 10:36:29 (до ~300 подтверждений/с), дальше 30 событий/с | с 10:36:23 несколько раз `UNKNOWN_MEMBER_ID`, `partitions lost, not committing` и новые назначения (10:36:24, 10:37:40-49, 10:38:48-58, 10:39:48, 10:40:33-39); lag в 0 к ~10:41 |
 
-* KRaft: kafka-3 после остановки kafka-2 примерно на 4 с стал лидером кворума (epoch 3), затем до
-  возврата брокеров перебирал состояния `Prospective`/`Candidate` (255 переходов в логе),
-  лидером снова стал в 16:29:40 (epoch 5).
-* `kafka-topics.sh --describe` на одном брокере за 30 с не ответил, `2-describe-2-one-broker.txt`
-  пустой.
-* После возврата (`2-describe-3-after.txt`) все три лидера `events` на kafka-3, ISR 1,2,3.
-* Ошибок `NOT_ENOUGH_REPLICAS` в логах продюсеров нет, `producer_batch_errors_total` и
-  `producer_events_failed_total` - 0.
-* Итог продюсеров (`2-producers.log`, `stopped`): `generated` 9040 + 9044 + 9043 = 27127,
-  подтверждено столько же, `failed` 0; в `verify` уникальных `seq` тоже 27127.
-* `verify`: потерь 0, дублей 0, нарушений порядка 0.
+* Ошибки по кодам за прогон (`2-producers.log`, строки `produce batch rejected`):
+  `NOT_ENOUGH_REPLICAS` 323 - в фазе A2 27 / 28 / 29 по партициям 0 / 1 / 2, в фазе B
+  80 / 81 / 78; `REQUEST_TIMED_OUT` 5 (3 на `p2` в 10:33:51, 2 на `p0` в 10:37:36);
+  `NOT_LEADER_FOR_PARTITION` 3 (по одному при стопе kafka-1 и kafka-2). На дашборде -
+  `producer_batch_errors_total{code}`.
+* Кворум: `kafka-metadata-quorum.sh` на kafka-3 при одном узле не ответил за 30 с, код 124
+  (`2-quorum-one-broker.txt`); после возврата лидер кворума - узел 2, все три голосующих на месте
+  (`2-quorum-after.txt`).
+* `kafka-topics.sh --describe` при одном узле (10:35:15) и через kafka-1 после возврата (10:37:47)
+  не ответил за 30 с (`2-describe-3-one-broker.txt`, `2-describe-4-after.txt`); лидеры и ISR в эти
+  моменты - по панелям exporter: все лидеры на kafka-3, ISR 3 после возврата.
+* Паузы среды: в логе продюсеров нет строк `stats` (пишутся раз в 10 с) с 10:29:25 до 10:31:19,
+  с 10:35:49 до 10:36:15 и с 10:37:09 до 10:37:35 у всех трёх продюсеров одновременно; на
+  графиках в эти интервалы нет точек. Потери консьюмерами партиций (`i/o timeout` в 10:31:19,
+  `UNKNOWN_MEMBER_ID` в 10:36:23 и 10:37:38-42, `partitions lost`) приходятся на конец этих
+  интервалов; первая - до стопа kafka-1.
+* `duplicates` - 2077 строк по всем трём партициям, с 10:31:22 по 10:40:43: после каждой потери
+  партиций чтение продолжается с последнего закоммиченного оффсета. В `events.dlt` 739 записей на
+  695 уникальных событий.
+* Итог продюсеров (`stopped`): `generated` 11479 + 11486 + 11466 = 34431, подтверждено столько же,
+  `failed` 0; в `verify` уникальных `seq` тоже 34431.
+* `verify`: потерь 0, нарушений порядка 0.
 
 #### Вывод
 
