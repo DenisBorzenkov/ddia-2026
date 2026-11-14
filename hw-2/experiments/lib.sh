@@ -32,7 +32,31 @@ kt() {
     timeout 30 "/opt/kafka/bin/$tool" --bootstrap-server "$broker:19092" "$@" </dev/null
 }
 
-describe() { kt "$1" kafka-topics.sh --describe --topic events 2>&1 | grep -v '^WARNING' || true; }
+# Описание топика events через брокер $1. Если команда не ответила, в вывод пишется факт.
+describe() {
+  local out code=0
+  out=$(kt "$1" kafka-topics.sh --describe --topic events 2>&1) || code=$?
+  printf '%s\n' "$out" | grep -v '^WARNING' || true
+  if [ "$code" != 0 ]; then
+    echo "# $(date -u +%H:%M:%S) kafka-topics.sh --describe через $1: нет ответа за 30 с (timeout 30, код $code)"
+  fi
+}
+
+# Статус кворума KRaft глазами контроллера $1.
+quorum() {
+  local code=0
+  docker exec -e KAFKA_HEAP_OPTS=-Xmx128m "hw2-$1-1" timeout 30 /opt/kafka/bin/kafka-metadata-quorum.sh \
+    --bootstrap-controller "$1:9093" describe --status </dev/null 2>&1 || code=$?
+  if [ "$code" != 0 ]; then
+    echo "# $(date -u +%H:%M:%S) kafka-metadata-quorum.sh через $1: код $code"
+  fi
+}
+
+# Меняет min.insync.replicas топика events через брокер $1.
+min_isr() {
+  kt "$1" kafka-configs.sh --alter --entity-type topics --entity-name events \
+    --add-config "min.insync.replicas=$2" 2>&1
+}
 groups() { kt "$1" kafka-consumer-groups.sh --describe --group events-processor 2>&1 || true; }
 
 # Останавливает продюсеров (на SIGTERM они досылают буфер) и запускает verify,
@@ -46,11 +70,13 @@ stop_and_verify() {
   mark end
 }
 
-# Выдержки из логов сервиса в файл: только сообщения, подходящие под regex.
+# Выдержки из логов сервисов в файл: только сообщения, подходящие под regex.
 logs_grep() {
   local regex=$1 out=$2
   shift 2
-  docker compose logs --no-color --no-log-prefix "$@" | grep -E "$regex" >"$out" || true
+  # попытки обработки poison ("processing failed") не нужны, их видно по DLT
+  docker compose logs --no-color --no-log-prefix "$@" | grep -v '"processing failed"' |
+    grep -E "$regex" >"$out" || true
 }
 
 sql() { docker exec hw2-postgres-1 psql -U events -d events -c "$1" </dev/null; }

@@ -1,0 +1,1 @@
+# 10:35:45 kafka-metadata-quorum.sh через kafka-3: код 124
