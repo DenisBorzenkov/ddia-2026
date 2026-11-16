@@ -1,0 +1,4 @@
+self-hosted-runner:
+  # стенд для hw-2-stand.yml
+  labels:
+    - sem3-hw2
