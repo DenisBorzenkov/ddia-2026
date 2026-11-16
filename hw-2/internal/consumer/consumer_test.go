@@ -161,3 +161,36 @@ func TestHandleCanceled(t *testing.T) {
 		t.Fatal("handled with canceled ctx and broken sink")
 	}
 }
+
+func TestInitEvents(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	NewMetrics(reg).InitEvents([]int32{0, 1, 2})
+
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]float64{}
+	for _, mf := range mfs {
+		if mf.GetName() != "consumer_events_total" {
+			continue
+		}
+		for _, s := range mf.GetMetric() {
+			l := map[string]string{}
+			for _, lp := range s.GetLabel() {
+				l[lp.GetName()] = lp.GetValue()
+			}
+			got["p"+l["partition"]+" "+l["result"]] = s.GetCounter().GetValue()
+		}
+	}
+	if len(got) != 9 {
+		t.Fatalf("series %v", got)
+	}
+	for _, p := range []string{"0", "1", "2"} {
+		for _, o := range []Outcome{OutcomeOK, OutcomeDuplicate, OutcomeDLT} {
+			if v, ok := got["p"+p+" "+string(o)]; !ok || v != 0 {
+				t.Errorf("p%s %s = %v, present %v", p, o, v, ok)
+			}
+		}
+	}
+}
