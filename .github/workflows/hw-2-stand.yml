@@ -126,6 +126,75 @@ jobs:
           docker compose logs --no-color -t >experiments/results/logs/3.log
           exit "$rc"
 
+      - name: results
+        if: ${{ !cancelled() && steps.verify.conclusion == 'success' }}
+        run: |
+          r=experiments/results
+          fail=0
+          err() { echo "::error::$*"; fail=1; }
+          note() { echo "$*"; echo "* $*" >>"$GITHUB_STEP_SUMMARY"; }
+          want() { [ "$EXPERIMENTS" = all ] || [ "$EXPERIMENTS" = "$1" ]; }
+          # значение строки отчёта verify по подписи и первое число из него
+          row() { sed -n "s/^$2  *//p" "$1" 2>/dev/null || true; }
+          num() { row "$1" "$2" | cut -d' ' -f1; }
+
+          runs=(0-smoke)
+          if want 1; then runs+=(1); fi
+          if want 2; then runs+=(2); fi
+          if want 3; then runs+=(3-user_id 3-none); fi
+
+          {
+            echo '| verify | в sink | в DLT (уник.) | lag | потеряно (польз.) | дублей | нарушений порядка (польз.) | итог |'
+            echo '| --- | --- | --- | --- | --- | --- | --- | --- |'
+            for f in "${runs[@]}"; do
+              v=$r/$f.txt
+              echo "| $f | $(row "$v" 'событий в sink') | $(row "$v" 'записей в events.dlt (уникальных)') | $(row "$v" 'lag группы') | $(row "$v" 'потеряно seq (пользователей)') | $(row "$v" 'отброшено дублей по event_id') | $(row "$v" 'нарушений порядка (пользователей)') | $(tail -1 "$v" 2>/dev/null) |"
+            done
+            echo
+          } >>"$GITHUB_STEP_SUMMARY"
+
+          for f in "${runs[@]}"; do
+            v=$r/$f.txt
+            [ -s "$v" ] || { err "$f: нет вывода verify"; continue; }
+            head -1 "$v" | grep -q '^DenisBorzenkov ' || err "$f: первая строка - не логин и время"
+            grep -q '^OK: потерь нет' "$v" || err "$f: $(tail -1 "$v")"
+            [ "$(row "$v" 'lag группы')" = 0 ] || err "$f: lag группы $(row "$v" 'lag группы')"
+          done
+
+          if want 1; then
+            dups=$(num "$r/1.txt" 'отброшено дублей по event_id')
+            owners=$(awk '$1 == "events-processor" { printf "p%s %s ", $3, $NF }' "$r/1-groups-after.txt" 2>/dev/null || true)
+            note "эксп. 1: дублей ${dups:-н/д}; партиции через 90 с после kill: ${owners:-н/д}"
+            [ "${dups:-0}" -gt 0 ] || err "эксп. 1: нет отброшенных дублей после kill -9"
+            # все три партиции у живых консьюмеров
+            awk '$1 == "events-processor" { n++; if ($NF == "consumer-2" || $NF == "-") bad++ }
+                 END { exit !(n == 3 && !bad) }' "$r/1-groups-after.txt" ||
+              err "эксп. 1: партиции consumer-2 не переназначены"
+          fi
+
+          if want 2; then
+            t() { sed -n "s/^$1=//p" "$r/2-times.env" 2>/dev/null || true; }
+            from=$(t min_isr_3) to=$(t min_isr_2)
+            # NOT_ENOUGH_REPLICAS между отметками min_isr_3 и min_isr_2 (мс)
+            ner=$(jq -nR --argjson from "${from:-0}" --argjson to "${to:-0}" '
+              [inputs | fromjson? | select(.code? == "NOT_ENOUGH_REPLICAS")
+               | .time | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 * 1000
+               | select(. >= $from and . <= $to)] | length' "$r/2-producers.log" || true)
+            codes=$(jq -nrR '[inputs | fromjson? | .code? // empty] | group_by(.)
+              | map("\(.[0]) \(length)") | join(", ")' "$r/2-producers.log" || true)
+            note "эксп. 2: NOT_ENOUGH_REPLICAS в фазе min.insync.replicas=3 - ${ner:-н/д}; отклонённые батчи за прогон: ${codes:-нет}"
+            [ "${ner:-0}" -gt 0 ] || err "эксп. 2: нет NOT_ENOUGH_REPLICAS в фазе min.insync.replicas=3"
+          fi
+
+          if want 3; then
+            u=$(num "$r/3-user_id.txt" 'нарушений порядка (пользователей)')
+            n=$(num "$r/3-none.txt" 'нарушений порядка (пользователей)')
+            note "эксп. 3: нарушений порядка user_id ${u:-н/д}, none ${n:-н/д}"
+            [ "$u" = 0 ] || err "эксп. 3: KEY_MODE=user_id дал нарушения порядка"
+            [ "${n:-0}" -gt 0 ] || err "эксп. 3: KEY_MODE=none без нарушений порядка"
+          fi
+          exit "$fail"
+
       - name: logs
         if: failure() || cancelled()
         run: docker compose logs --no-color -t >experiments/results/logs/last.log
