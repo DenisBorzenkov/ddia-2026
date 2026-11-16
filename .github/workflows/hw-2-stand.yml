@@ -9,6 +9,12 @@ on:
       - hw-2/**
       - .github/workflows/hw-2-stand.yml
   workflow_dispatch:
+    inputs:
+      experiments:
+        description: Эксперименты после проверки стека
+        type: choice
+        options: [all, none, "1", "2", "3"]
+        default: all
 
 permissions:
   contents: read
@@ -25,6 +31,7 @@ defaults:
 
 env:
   COMPOSE_PROJECT_NAME: hw2
+  EXPERIMENTS: ${{ inputs.experiments || 'all' }}
   LOAD_SECONDS: 60
 
 jobs:
@@ -90,6 +97,34 @@ jobs:
       - name: smoke logs
         if: always()
         run: docker compose logs --no-color -t >experiments/results/logs/0-smoke.log
+
+      # каждый эксперимент сам поднимает чистый стек; неудача одного не отменяет следующие
+      - name: experiment 1 - kill -9 consumer
+        if: ${{ !cancelled() && steps.verify.conclusion == 'success' && (env.EXPERIMENTS == 'all' || env.EXPERIMENTS == '1') }}
+        timeout-minutes: 15
+        run: |
+          rc=0
+          ./experiments/1-kill-consumer.sh || rc=$?
+          docker compose logs --no-color -t >experiments/results/logs/1.log
+          exit "$rc"
+
+      - name: experiment 2 - brokers down
+        if: ${{ !cancelled() && steps.verify.conclusion == 'success' && (env.EXPERIMENTS == 'all' || env.EXPERIMENTS == '2') }}
+        timeout-minutes: 25
+        run: |
+          rc=0
+          ./experiments/2-brokers-down.sh || rc=$?
+          docker compose logs --no-color -t >experiments/results/logs/2.log
+          exit "$rc"
+
+      - name: experiment 3 - KEY_MODE none vs user_id
+        if: ${{ !cancelled() && steps.verify.conclusion == 'success' && (env.EXPERIMENTS == 'all' || env.EXPERIMENTS == '3') }}
+        timeout-minutes: 25
+        run: |
+          rc=0
+          ./experiments/3-key-mode.sh || rc=$?
+          docker compose logs --no-color -t >experiments/results/logs/3.log
+          exit "$rc"
 
       - name: logs
         if: failure() || cancelled()
