@@ -88,6 +88,17 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	}
 }
 
+// InitEvents заводит нулевые серии consumer_events_total для каждой партиции и каждого исхода.
+// Повторы после ребаланса приходят пачкой быстрее интервала скрейпа: серия, которая появилась
+// сразу со значением N, для increase() не растёт, и дубли на дашборде не видны.
+func (m *Metrics) InitEvents(partitions []int32) {
+	for _, p := range partitions {
+		for _, o := range []Outcome{OutcomeOK, OutcomeDuplicate, OutcomeDLT} {
+			m.Events.WithLabelValues(strconv.Itoa(int(p)), string(o)).Add(0)
+		}
+	}
+}
+
 // Processor обрабатывает одну запись.
 type Processor struct {
 	ConsumerID  string
