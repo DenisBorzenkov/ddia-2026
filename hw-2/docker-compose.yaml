@@ -201,7 +201,7 @@ services:
   grafana:
     image: grafana/grafana:13.2.4
     restart: unless-stopped
-    mem_limit: 512m
+    mem_limit: 1g
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:?set in .env}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set in .env}
