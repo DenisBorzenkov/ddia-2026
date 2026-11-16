@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"github.com/DenisBorzenkov/ddia-2026/hw-2/internal/consumer"
@@ -97,6 +98,13 @@ func run(log *slog.Logger) error {
 		return err
 	}
 
+	// нулевые серии consumer_events_total по всем партициям топика, см. Metrics.InitEvents
+	if parts, err := partitions(ctx, cl, topic); err != nil {
+		log.Warn("topic partitions, events series not initialized", "err", err)
+	} else {
+		m.InitEvents(parts)
+	}
+
 	g.Proc = &consumer.Processor{
 		ConsumerID:   pod,
 		Delay:        delay,
@@ -115,4 +123,18 @@ func run(log *slog.Logger) error {
 	cl.Close()
 	log.Info("stopped")
 	return nil
+}
+
+// partitions - номера партиций топика из метаданных.
+func partitions(ctx context.Context, cl *kgo.Client, topic string) ([]int32, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	td, err := kadm.NewClient(cl).ListTopics(ctx, topic)
+	if err == nil {
+		err = td.Error()
+	}
+	if err != nil {
+		return nil, err
+	}
+	return td[topic].Partitions.Numbers(), nil
 }
