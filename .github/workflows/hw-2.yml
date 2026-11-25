@@ -1,0 +1,155 @@
+name: hw-2
+
+on:
+  pull_request:
+    paths:
+      - hw-2/**
+      - .github/workflows/hw-2.yml
+  push:
+    branches: [main, ddia-hw-2]
+    paths:
+      - hw-2/**
+      - .github/workflows/hw-2.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hw-2-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: hw-2
+
+jobs:
+  go:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: hw-2/go.mod
+          cache-dependency-path: hw-2/go.sum
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: vet
+        run: go vet ./...
+      - name: test
+        run: go test -race ./...
+      - uses: golangci/golangci-lint-action@v9.3.0
+        with:
+          version: v2.15.0
+          working-directory: hw-2
+
+  docker:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: hadolint/hadolint-action@v3.5.0
+        with:
+          dockerfile: hw-2/Dockerfile
+      - name: env
+        run: cp .env.example .env
+      - name: compose config
+        run: docker compose config -q
+      - name: promtool
+        run: docker run --rm -v "$PWD/prometheus:/cfg:ro" --entrypoint promtool prom/prometheus:v3.15.1 check config /cfg/prometheus.yml
+      - name: compose up
+        run: docker compose up -d --build
+      - name: kafka-init
+        run: |
+          code=$(timeout 300 docker wait "$(docker compose ps -aq kafka-init)")
+          docker compose logs kafka-init
+          test "$code" = 0
+      - name: topics
+        run: |
+          describe() {
+            docker compose exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka-1 \
+              /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:19092 --describe --topic "$1"
+          }
+          describe events | tee /tmp/events
+          grep -q 'PartitionCount: 3.*ReplicationFactor: 3.*min.insync.replicas=2' /tmp/events
+          describe events.dlt | tee /tmp/dlt
+          grep -q 'PartitionCount: 3.*ReplicationFactor: 3' /tmp/dlt
+          docker compose exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka-1 \
+            /opt/kafka/bin/kafka-configs.sh --bootstrap-server kafka-1:19092 --describe --entity-type brokers --entity-name 1 --all \
+            | grep -q '^ *auto.create.topics.enable=false'
+      - name: pipeline
+        run: |
+          sql() { docker compose exec -T postgres psql -U events -d events -tAc "$1"; }
+          dlt() {
+            docker compose exec -T -e KAFKA_HEAP_OPTS=-Xmx128m kafka-1 \
+              /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server kafka-1:19092 --topic events.dlt \
+              | awk -F: '{ s += $3 } END { print s + 0 }'
+          }
+          for _ in $(seq 18); do
+            # таблицу создаёт консьюмер при старте, до этого запрос падает
+            producers=$(sql 'SELECT count(DISTINCT producer_id) FROM events' || echo 0)
+            consumers=$(sql 'SELECT count(DISTINCT consumer_id) FROM events' || echo 0)
+            dlt=$(dlt || true)
+            echo "producers=$producers consumers=$consumers dlt=$dlt"
+            [ "$producers" = 3 ] && [ "$consumers" = 3 ] && [ "${dlt:-0}" -gt 0 ] && exit 0
+            sleep 5
+          done
+          exit 1
+      - name: prometheus targets
+        run: |
+          for _ in $(seq 30); do
+            up=$(curl -s localhost:9090/api/v1/targets | jq '[.data.activeTargets[] | select(.health == "up")] | length')
+            [ "$up" = 7 ] && exit 0
+            sleep 2
+          done
+          curl -s localhost:9090/api/v1/targets | jq .
+          exit 1
+      - name: metrics
+        run: |
+          q() { curl -s localhost:9090/api/v1/query --data-urlencode "query=$1" | jq -r '.data.result | length'; }
+          for _ in $(seq 30); do
+            producers=$(q 'sum by (pod) (rate(producer_events_acked_total[1m]) > 0)')
+            consumers=$(q 'sum by (pod) (rate(consumer_events_total{result="ok"}[1m]) > 0)')
+            lag=$(q 'kafka_consumergroup_lag{consumergroup="events-processor", topic="events"}')
+            leaders=$(q 'kafka_topic_partition_leader{topic="events"} > 0')
+            echo "producers=$producers consumers=$consumers lag=$lag leaders=$leaders"
+            [ "$producers" = 3 ] && [ "$consumers" = 3 ] && [ "$lag" = 3 ] && [ "$leaders" = 3 ] && exit 0
+            sleep 5
+          done
+          exit 1
+      - name: grafana
+        run: |
+          set -a; . ./.env; set +a
+          auth="$GRAFANA_ADMIN_USER:$GRAFANA_ADMIN_PASSWORD"
+          for _ in $(seq 30); do
+            curl -s -u "$auth" localhost:3000/api/datasources/uid/prometheus/health | jq -e '.status == "OK"' && break
+            sleep 2
+          done
+          curl -sSf -u "$auth" localhost:3000/api/datasources/uid/prometheus/health | jq -e '.status == "OK"'
+          # анонимный просмотр без прав на правку
+          curl -sSf localhost:3000/api/dashboards/uid/hw2-kafka | jq -e '
+            .meta.canEdit == false and
+            ([.dashboard.panels[] | select(.type != "row")] | length) >= 12 and
+            all(.dashboard.panels[] | select(.type != "row") | .targets[]; .datasource.uid == "prometheus")'
+      - name: verify
+        run: |
+          docker compose stop producer-1 producer-2 producer-3
+          docker compose run --rm verify verify -wait=2m | tee /tmp/verify
+          head -1 /tmp/verify | grep -q '^DenisBorzenkov '
+          grep -q '^OK' /tmp/verify
+      - name: logs
+        if: failure()
+        run: docker compose logs
+      - name: compose down
+        if: always()
+        run: docker compose down -v
+
+  actionlint:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: actionlint
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
+          ./actionlint -color
